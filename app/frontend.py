@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import time
 
 # ── Configuration ────────────────────────────────────────────────────────
 API_URL = "http://localhost:8000"
@@ -48,8 +49,37 @@ st.markdown("""
 # ── State Initialization ─────────────────────────────────────────────────
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "session_id" not in st.session_state:
-    st.session_state.session_id = None
+
+# Auto-create session on load so memory works immediately
+if "session_id" not in st.session_state or st.session_state.session_id is None:
+    try:
+        res = requests.post(f"{API_URL}/session")
+        if res.status_code == 200:
+            st.session_state.session_id = res.json()["session_id"]
+    except:
+        st.session_state.session_id = None
+
+
+# ── NEW: Helper Functions for Streaming and Export ───────────────────────
+def stream_text(text):
+    """Simulates the ChatGPT typing effect for verified answers."""
+    for word in text.split(" "):
+        yield word + " "
+        time.sleep(0.03)
+
+def generate_chat_log():
+    """Formats the entire session history into a clean TXT format."""
+    log_content = "⚡ RAG Technical Assistant - Chat Session ⚡\n"
+    log_content += "="*45 + "\n\n"
+    for msg in st.session_state.messages:
+        role = "👤 USER" if msg["role"] == "user" else "🤖 ASSISTANT"
+        log_content += f"{role}:\n{msg['content']}\n"
+        if "sources" in msg and msg["sources"]:
+            log_content += "\nSOURCES:\n"
+            for s in msg["sources"]:
+                log_content += f"- {s.get('source', 'Unknown')}\n"
+        log_content += "-"*45 + "\n\n"
+    return log_content
 
 
 # ── Sidebar: Control Panel & Ingestion ───────────────────────────────────
@@ -60,7 +90,6 @@ with st.sidebar:
     try:
         res = requests.get(f"{API_URL}/")
         if res.status_code == 200:
-            data = res.json()
             st.success("Backend Online")
         else:
             st.error("Backend Offline")
@@ -83,6 +112,21 @@ with st.sidebar:
                     st.error(f"Failed: {res.text}")
             except Exception as e:
                 st.error(f"Error: {str(e)}")
+
+    st.divider()
+
+    # ── NEW: Chat Export UI ──────────────────────────────────────────────
+    st.subheader("💾 Export Chat")
+    if len(st.session_state.messages) > 0:
+        st.download_button(
+            label="Download Chat Log (TXT)",
+            data=generate_chat_log(),
+            file_name="rag_chat_log.txt",
+            mime="text/plain",
+            use_container_width=True
+        )
+    else:
+        st.caption("Ask a question to enable chat export.")
 
 
 # ── Main Chat Interface ──────────────────────────────────────────────────
@@ -130,9 +174,15 @@ if prompt := st.chat_input("Ask a technical question..."):
                     answer = data["answer"]
                     sources = data.get("sources", [])
                     
-                    # Display the final answer
-                    message_placeholder.markdown(answer)
+                    # ── NEW: Stream the final verified answer ──────────────────
+                    message_placeholder.write_stream(stream_text(answer))
                     
+                    # Render sources expander for the current response
+                    if sources:
+                        with st.expander("View Retrieved Sources"):
+                            for s in sources:
+                                st.caption(f"📄 **{s.get('title', 'Doc')}** (Score: {s.get('similarity_score', 'N/A')})")
+                                st.caption(f"🔗 {s.get('source', '')}")
 
                     # Save assistant response to memory
                     st.session_state.messages.append({
@@ -140,9 +190,11 @@ if prompt := st.chat_input("Ask a technical question..."):
                         "content": answer,
                         "sources": sources
                     })
+                    
+                    # Force a rerun to update the sidebar download button state
+                    st.rerun()
 
                 else:
                     st.error(f"Pipeline Error: {response.status_code} - {response.text}")
             except requests.exceptions.ConnectionError:
                 st.error("Failed to connect to the backend. Please ensure the FastAPI server is running.")
-                
