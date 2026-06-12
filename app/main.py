@@ -56,6 +56,7 @@ class QueryResponse(BaseModel):
     sources: List[dict]
     retry_count: int
     query_id: str
+    hallucination_score: str
 
 class IngestURLRequest(BaseModel):
     urls: List[str]
@@ -132,6 +133,8 @@ def query(request: QueryRequest):
         "relevant_documents": [],
         "all_irrelevant": False,
         "answer": "",
+        "hallucination_score": "grounded",
+        "hallucination_feedback": "",
         "retry_count": 0,
         "max_retries": request.max_retries
     }
@@ -155,7 +158,8 @@ def query(request: QueryRequest):
         answer=final_state["answer"],
         sources=sources,
         retry_count=final_state["retry_count"],
-        query_id=str(uuid.uuid4())
+        query_id=str(uuid.uuid4()),
+        hallucination_score=final_state.get("hallucination_score", "grounded")
     )
 
 

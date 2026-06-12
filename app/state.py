@@ -26,6 +26,10 @@ class RAGState(TypedDict):
     # --- Generation ---
     answer: str                          # Final generated answer with citations
 
+    # --- Hallucination Check ---
+    hallucination_score: str             # "grounded", "partial", or "hallucinated"
+    hallucination_feedback: str          # One line explanation from the checker
+
     # --- Control Flow ---
     retry_count: int                     # How many times we've rewritten + re-retrieved
     max_retries: int                     # Ceiling to prevent infinite loops (default: 2)
