@@ -2,6 +2,8 @@
 
 An intelligent, self-correcting Retrieval-Augmented Generation (RAG) system built with **FastAPI**, **LangGraph**, and **ChromaDB**. This project serves as a technical documentation assistant capable of answering complex queries, routing around irrelevant data, fact-checking its own answers, and falling back to real-time web searches when local knowledge fails.
 
+Built for the **Express Analytics AI/ML Engineer Intern** assignment.
+
 ---
 
 ## 🚀 Features
@@ -13,10 +15,11 @@ An intelligent, self-correcting Retrieval-Augmented Generation (RAG) system buil
 * **Local Vector Database:** ChromaDB implementation using localized ONNX embeddings for fast, private document retrieval.
 
 ### Advanced Pipeline Additions
-* **Hallucination Checker:** A post-generation verification node that cross-references the LLM's answer with the source documents. If a hallucination is detected, it triggers a strict regeneration.
+* **Hallucination Checker:** A post-generation verification node cross-references the LLM's answer with the source documents. If a hallucination is detected, it triggers a strict, mandatory-citation regeneration.
 * **Tavily Web Search Fallback:** If the local document corpus fails to answer the question after multiple retries, the system seamlessly falls back to a web search.
-* **Conversation Memory:** Context-aware query analysis that resolves pronouns and maintains technical context across multi-turn sessions.
-* **Streamlit Interactive UI:** A custom frontend that visualizes the pipeline's internal state (retries, web search usage, hallucination flags).
+* **Contextual Memory (Entity Resolution):** The query analyzer aggressively resolves pronouns and abstract references from previous conversational turns to maintain precise technical context.
+* **Streamlit Interactive UI:** A custom frontend featuring real-time 
+* **One-click Chat Log Exports** allowing users to download their entire session history as a formatted `.txt` file.
 
 ---
 
