@@ -19,7 +19,7 @@ Built for the **Express Analytics AI/ML Engineer Intern** assignment.
 * **Tavily Web Search Fallback:** If the local document corpus fails to answer the question after multiple retries, the system seamlessly falls back to a web search.
 * **Contextual Memory (Entity Resolution):** The query analyzer aggressively resolves pronouns and abstract references from previous conversational turns to maintain precise technical context.
 * **Streamlit Interactive UI:** A custom frontend featuring real-time 
-* **One-click Chat Log Exports** allowing users to download their entire session history as a formatted `.txt` file.
+* **One-click Chat Log Exports:** It allows users to download their entire session history as a formatted `.txt` file.
 
 ---
 
