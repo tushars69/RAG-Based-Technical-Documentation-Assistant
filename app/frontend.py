@@ -61,7 +61,6 @@ with st.sidebar:
         res = requests.get(f"{API_URL}/")
         if res.status_code == 200:
             data = res.json()
-            st.metric("Indexed Chunks", data.get("chunks_indexed", 0))
             st.success("Backend Online")
         else:
             st.error("Backend Offline")
@@ -134,34 +133,6 @@ if prompt := st.chat_input("Ask a technical question..."):
                     # Display the final answer
                     message_placeholder.markdown(answer)
                     
-                    # Display pipeline metadata in columns
-                    cols = st.columns(3)
-                    
-                    # 1. Hallucination Check
-                    with cols[0]:
-                        score = data.get("hallucination_score", "grounded")
-                        if score == "grounded":
-                            st.info("✅ Grounded Response")
-                        elif score == "hallucinated":
-                            st.warning("⚠️ Self-Corrected Hallucination")
-                            
-                    # 2. Web Search Fallback
-                    with cols[1]:
-                        if data.get("web_search_used"):
-                            st.info("🌐 Web Search Fallback Used")
-                            
-                    # 3. Retries
-                    with cols[2]:
-                        retries = data.get("retry_count", 0)
-                        if retries > 0:
-                            st.info(f"🔄 Retries: {retries}")
-
-                    # Render sources expander for the current response
-                    if sources:
-                        with st.expander("View Retrieved Sources"):
-                            for s in sources:
-                                st.caption(f"📄 **{s.get('title', 'Doc')}** (Score: {s.get('similarity_score', 'N/A')})")
-                                st.caption(f"🔗 {s.get('source', '')}")
 
                     # Save assistant response to memory
                     st.session_state.messages.append({

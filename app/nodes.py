@@ -39,10 +39,6 @@ tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 def query_analysis_node(state: RAGState) -> dict:
     """
     Rewrites the user's question to improve retrieval quality.
-
-    Now chat_history aware — if the user asks "what about its performance?"
-    after a question about Django, the rewrite understands the context
-    and expands it to "what is the performance of Django ORM?"
     """
     print(f"\n[Node 1] Query Analysis | retry={state['retry_count']}")
 
@@ -57,7 +53,7 @@ Always treat 'RAG' as 'Retrieval-Augmented Generation'.
 Your job:
 1. Add relevant technical synonyms if needed.
 2. Make the user's intent explicit.
-3. If chat history is provided, resolve any pronouns or references.
+3. ENTITY RESOLUTION (CRITICAL): If chat history is provided, you MUST replace vague pronouns (it, that) or abstract references ("the first approach", "this framework") with the actual proper nouns and framework names discussed earlier.
 4. STRICT LENGTH LIMIT: The rewritten query MUST be concise and under 250 characters.
 
 If this is a retry (retry_count > 0), try a different phrasing.
@@ -186,7 +182,7 @@ def generation_node(state: RAGState) -> dict:
 Rules:
 1. Answer ONLY using the provided context. Do not use outside knowledge.
 2. Be precise and technical — your audience are developers.
-3. After each key claim, cite the source like: [Source 1] or [Source 2]
+3. After each key claim, cite the source explicitly like: [Source 1] or [Source 2]. This is a strict requirement.
 4. If the context partially answers the question, answer what you can and say what's missing.
 5. Use markdown formatting: code blocks for code, bullet points for lists.
 6. Keep the answer focused and concise.
@@ -303,7 +299,7 @@ You may ONLY state facts explicitly present in the provided context.
 If the context does not fully answer the question, say what IS covered
 and clearly state: "The source does not cover [X]."
 
-Do NOT infer, extrapolate, or use outside knowledge. Citations are mandatory."""),
+Do NOT infer, extrapolate, or use outside knowledge. Inline citations (e.g., [Source 1]) are mandatory for every claim."""),
         ("human", """Context:
 {context}
 
@@ -311,7 +307,7 @@ Question: {question}
 
 Previous answer was flagged: {feedback}
 
-Provide a strictly grounded answer:""")
+Provide a strictly grounded answer with citations:""")
     ])
 
     chain = strict_prompt | llm | StrOutputParser()
