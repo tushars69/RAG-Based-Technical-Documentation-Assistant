@@ -1,39 +1,31 @@
 """
 Vector store wrapper around ChromaDB.
-
-Handles:
-- Embedding documents using sentence-transformers (free, local)
-- Storing chunks with metadata
-- Similarity search at query time
+Uses ChromaDB's built-in ONNX embedding function — no torch, no triton.
 """
 
 from typing import List, Dict, Any
 import chromadb
 from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
+from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
 from langchain_core.documents import Document
-
 
 CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "rag_documents"
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"  # fast, 384-dim, no API key needed
 TOP_K = 5
 
 
 class VectorStore:
     def __init__(self):
-        self.embedder = SentenceTransformer(EMBEDDING_MODEL)
+        self.embedding_fn = ONNXMiniLM_L6_V2()
         self.client = chromadb.PersistentClient(
             path=CHROMA_PATH,
             settings=Settings(anonymized_telemetry=False)
         )
         self.collection = self.client.get_or_create_collection(
             name=COLLECTION_NAME,
+            embedding_function=self.embedding_fn,
             metadata={"hnsw:space": "cosine"}
         )
-
-    def embed(self, texts: List[str]) -> List[List[float]]:
-        return self.embedder.encode(texts, show_progress_bar=False).tolist()
 
     def add_documents(self, documents: List[Document]) -> int:
         if not documents:
@@ -41,27 +33,22 @@ class VectorStore:
 
         texts = [doc.page_content for doc in documents]
         metadatas = [doc.metadata for doc in documents]
-        embeddings = self.embed(texts)
-
-        # Stable IDs so re-running ingest never creates duplicates
         ids = [
             f"{doc.metadata.get('source', 'unknown')}__chunk_{i}"
             for i, doc in enumerate(documents)
         ]
 
+        # No manual embedding — ChromaDB handles it internally
         self.collection.upsert(
             ids=ids,
             documents=texts,
-            embeddings=embeddings,
             metadatas=metadatas
         )
         return len(documents)
 
     def similarity_search(self, query: str, k: int = TOP_K) -> List[Document]:
-        query_embedding = self.embed([query])[0]
-
         results = self.collection.query(
-            query_embeddings=[query_embedding],
+            query_texts=[query],
             n_results=min(k, self.collection.count()),
             include=["documents", "metadatas", "distances"]
         )
@@ -102,5 +89,4 @@ class VectorStore:
         return self.collection.count()
 
 
-# Singleton shared across the entire app
 vector_store = VectorStore()

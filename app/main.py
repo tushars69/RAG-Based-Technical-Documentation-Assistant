@@ -20,7 +20,7 @@ from pydantic import BaseModel
 import requests
 from bs4 import BeautifulSoup
 from markdownify import markdownify
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from dotenv import load_dotenv
 
