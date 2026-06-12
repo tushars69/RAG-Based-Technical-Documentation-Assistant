@@ -51,16 +51,16 @@ def query_analysis_node(state: RAGState) -> dict:
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", """You are an expert at reformulating technical questions for better document retrieval.
+The domain is strictly Software Engineering, AI, Python, and LangGraph. 
+Always treat 'RAG' as 'Retrieval-Augmented Generation'.
 
 Your job:
-1. Expand abbreviations and add relevant technical synonyms
-2. Make the intent explicit (e.g., "how to" vs "what is" vs "why")
-3. Add context that helps find the right documentation section
-4. If chat history is provided, resolve any pronouns or references
-   (e.g., "how does it work?" → "how does Django ORM work?" based on history)
+1. Add relevant technical synonyms if needed.
+2. Make the user's intent explicit.
+3. If chat history is provided, resolve any pronouns or references.
+4. STRICT LENGTH LIMIT: The rewritten query MUST be concise and under 250 characters.
 
-If this is a retry (retry_count > 0), try a significantly different phrasing.
-
+If this is a retry (retry_count > 0), try a different phrasing.
 Return ONLY the rewritten query. No explanation, no preamble."""),
         MessagesPlaceholder(variable_name="chat_history", optional=True),
         ("human", """Original question: {question}
@@ -143,7 +143,8 @@ Grade (relevant/irrelevant):""")
 
         print(f"  chunk {i+1}: {grade} | {doc.page_content[:60]}...")
 
-        if "relevant" in grade:
+        # FIX: Use exact match to avoid "irrelevant" passing the check
+        if grade == "relevant":
             relevant_docs.append(doc)
 
     all_irrelevant = len(relevant_docs) == 0
@@ -335,11 +336,12 @@ def web_search_node(state: RAGState) -> dict:
     Fallback when vector store has no relevant docs after all retries.
     Searches the web using Tavily and converts results into Documents.
     """
-    print(f"\n[Node 6] Web Search Fallback | query='{state['question'][:60]}'")
+    # FIX: Use the rewritten, context-aware query for web search
+    print(f"\n[Node 6] Web Search Fallback | query='{state['rewritten_query'][:60]}'")
 
     try:
         response = tavily.search(
-            query=state["question"],
+            query=state["rewritten_query"][:390], 
             max_results=4,
             search_depth="basic"
         )

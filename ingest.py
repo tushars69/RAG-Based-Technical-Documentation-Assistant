@@ -34,6 +34,31 @@ CORPUS = [
         "url": "https://fastapi.tiangolo.com/tutorial/handling-errors/",
         "title": "FastAPI - Handling Errors"
     },
+    {
+        "url": "https://docs.langchain.com/oss/python/langgraph/agentic-rag",
+        "title": "Agentic RAG Tutorial"
+    },
+    {
+        "url": "https://langchain-ai.github.io/langgraph/tutorials/rag/langgraph_adaptive_rag/",
+        "title": "Adaptive RAG Tutorial"
+    },
+    {
+
+        "url": "https://raw.githubusercontent.com/langchain-ai/langgraph/main/examples/rag/langgraph_crag.ipynb",
+        "title": "Corrective RAG (CRAG) Notebook"
+    },
+    {
+        "url": "https://blog.langchain.com/agentic-rag-with-langgraph/",
+        "title": "Self-RAG Blog Post"
+    },
+    {
+        "url": "https://langchain-opentutorial.gitbook.io/langchain-opentutorial/17-langgraph/02-structures/06-langgraph-agentic-rag",
+        "title": "Community - Adaptive RAG Walkthrough"
+    },
+    {
+        "url": "https://blog.futuresmart.ai/langgraph-rag-agent-tutorial-basics-to-advanced-multi-agent-ai-chatbot",
+        "title": "FutureSmart AI - LangGraph RAG Agent"
+    }
 ]
 
 
