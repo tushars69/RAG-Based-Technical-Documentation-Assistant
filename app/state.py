@@ -30,6 +30,10 @@ class RAGState(TypedDict):
     hallucination_score: str             # "grounded", "partial", or "hallucinated"
     hallucination_feedback: str          # One line explanation from the checker
 
+    # --- Web Search Fallback ---
+    web_search_used: bool                # True if answer came from web search
+    web_search_results: List[Document]   # Results from Tavily
+
     # --- Control Flow ---
     retry_count: int                     # How many times we've rewritten + re-retrieved
     max_retries: int                     # Ceiling to prevent infinite loops (default: 2)

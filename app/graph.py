@@ -5,11 +5,18 @@ Graph structure:
 
   START → query_analysis → retrieval → grading ──→ generation → hallucination_check → END
                 ↑                          │                             │
-                │                          ↓ (all irrelevant+retries)   ↓ (hallucinated)
+                │                          ↓ (retries left)             ↓ (hallucinated)
                 └──── increment_retry ─────┘                   fix_hallucination → END
                                            │
                                            ↓ (retries exhausted)
-                                        fallback → END
+                                       web_search
+                                           │
+                               ┌───────────┴───────────┐
+                           has results              no results
+                               │                       │
+                           generation              fallback → END
+                               │
+                       hallucination_check → END
 """
 
 from langgraph.graph import StateGraph, END
@@ -19,10 +26,12 @@ from app.nodes import (
     retrieval_node,
     grading_node,
     generation_node,
-    fallback_node,
-    route_after_grading,
     hallucination_check_node,
     fix_hallucination_node,
+    web_search_node,
+    fallback_node,
+    route_after_grading,
+    route_after_web_search,
     route_after_hallucination_check
 )
 
@@ -41,6 +50,7 @@ def build_rag_graph():
     graph.add_node("generation", generation_node)
     graph.add_node("hallucination_check", hallucination_check_node)
     graph.add_node("fix_hallucination", fix_hallucination_node)
+    graph.add_node("web_search", web_search_node)
     graph.add_node("fallback", fallback_node)
     graph.add_node("increment_retry", increment_retry)
 
@@ -51,24 +61,34 @@ def build_rag_graph():
     graph.add_edge("query_analysis", "retrieval")
     graph.add_edge("retrieval", "grading")
 
-    # ── Conditional edge after grading ────────────────────────────
+    # ── Conditional: after grading ────────────────────────────────
     graph.add_conditional_edges(
         "grading",
         route_after_grading,
         {
             "generate": "generation",
             "rewrite": "increment_retry",
-            "fallback": "fallback"
+            "web_search": "web_search"      # NEW: try web before fallback
         }
     )
 
     # ── Retry loop ────────────────────────────────────────────────
     graph.add_edge("increment_retry", "query_analysis")
 
-    # ── Generation → hallucination check (not straight to END) ───
+    # ── Conditional: after web search ────────────────────────────
+    graph.add_conditional_edges(
+        "web_search",
+        route_after_web_search,
+        {
+            "generate": "generation",   # web results → reuse generation node
+            "fallback": "fallback"
+        }
+    )
+
+    # ── Generation → hallucination check ─────────────────────────
     graph.add_edge("generation", "hallucination_check")
 
-    # ── Conditional edge after hallucination check ────────────────
+    # ── Conditional: after hallucination check ────────────────────
     graph.add_conditional_edges(
         "hallucination_check",
         route_after_hallucination_check,

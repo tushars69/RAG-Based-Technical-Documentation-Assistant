@@ -57,6 +57,7 @@ class QueryResponse(BaseModel):
     retry_count: int
     query_id: str
     hallucination_score: str
+    web_search_used: bool
 
 class IngestURLRequest(BaseModel):
     urls: List[str]
@@ -135,12 +136,15 @@ def query(request: QueryRequest):
         "answer": "",
         "hallucination_score": "grounded",
         "hallucination_feedback": "",
+        "web_search_used": False,
+        "web_search_results": [],
         "retry_count": 0,
         "max_retries": request.max_retries
     }
 
     final_state = rag_graph.invoke(initial_state)
 
+    # Build sources list — from vector store or web search
     sources = []
     seen_sources = set()
     for doc in final_state.get("relevant_documents", []):
@@ -150,7 +154,8 @@ def query(request: QueryRequest):
             sources.append({
                 "source": src,
                 "title": doc.metadata.get("title", src),
-                "similarity_score": doc.metadata.get("similarity_score")
+                "similarity_score": doc.metadata.get("similarity_score"),
+                "from_web": doc.metadata.get("from_web", False)
             })
 
     return QueryResponse(
@@ -159,7 +164,8 @@ def query(request: QueryRequest):
         sources=sources,
         retry_count=final_state["retry_count"],
         query_id=str(uuid.uuid4()),
-        hallucination_score=final_state.get("hallucination_score", "grounded")
+        hallucination_score=final_state.get("hallucination_score", "grounded"),
+        web_search_used=final_state.get("web_search_used", False)
     )
 
 
@@ -245,3 +251,4 @@ def feedback_summary():
         "thumbs_down": len(feedback_store) - ups,
         "approval_rate": round(ups / len(feedback_store), 2)
     }
+    

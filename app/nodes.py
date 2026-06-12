@@ -1,14 +1,13 @@
 """
-The four LangGraph nodes that form the RAG pipeline.
-
-Each node:
-  - Receives the full RAGState
-  - Does one focused job
-  - Returns a dict of only the fields it updates
+The four LangGraph nodes that form the RAG pipeline + bonus nodes.
 
 Node order: query_analysis → retrieval → grading → generation → hallucination_check
                                ↑                        |
                                └── (retry if needed) ───┘
+                                           |
+                              (retries exhausted → web_search → generation)
+                                           |
+                                    (web fails → fallback)
 """
 
 import os
@@ -16,6 +15,8 @@ from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.documents import Document
+from tavily import TavilyClient
 
 from app.state import RAGState
 from app.vector_store import vector_store
@@ -28,6 +29,9 @@ llm = ChatGroq(
     temperature=0,
     api_key=os.getenv("GROQ_API_KEY")
 )
+
+# ── Tavily Setup ───────────────────────────────────────────────────────────────
+tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 
 
 # ── Node 1: Query Analysis ─────────────────────────────────────────────────────
@@ -72,8 +76,7 @@ Rewrite this question for better technical document retrieval:""")
 def retrieval_node(state: RAGState) -> dict:
     """
     Searches ChromaDB for the top-k chunks most similar to the rewritten query.
-    Filters out chunks below similarity threshold to prevent weak matches
-    from reaching the grader.
+    Filters out chunks below similarity threshold to prevent weak matches.
     """
     print(f"\n[Node 2] Retrieval | query='{state['rewritten_query'][:60]}...'")
 
@@ -94,10 +97,6 @@ def retrieval_node(state: RAGState) -> dict:
 def grading_node(state: RAGState) -> dict:
     """
     Self-corrective node — LLM strictly judges each chunk as relevant or not.
-
-    Outcomes:
-    - Some relevant → filter and proceed to generation
-    - None relevant → set all_irrelevant=True → router retries
     """
     print(f"\n[Node 3] Grading {len(state['documents'])} chunks...")
 
@@ -150,10 +149,12 @@ Grade (relevant/irrelevant):""")
 # ── Node 4: Generation ─────────────────────────────────────────────────────────
 def generation_node(state: RAGState) -> dict:
     """
-    Generates the final answer grounded in the relevant document chunks.
-    Requires inline citations referencing source documents.
+    Generates the final answer grounded in relevant_documents.
+    Works for both vector store results and web search results —
+    whatever is in relevant_documents gets used here.
     """
-    print(f"\n[Node 4] Generation | {len(state['relevant_documents'])} context chunks")
+    print(f"\n[Node 4] Generation | {len(state['relevant_documents'])} context chunks"
+          f" | web_search={state.get('web_search_used', False)}")
 
     context_parts = []
     for i, doc in enumerate(state["relevant_documents"]):
@@ -162,8 +163,13 @@ def generation_node(state: RAGState) -> dict:
 
     context = "\n\n---\n\n".join(context_parts)
 
+    # Slightly different system prompt when using web results
+    source_note = (
+        "web search results" if state.get("web_search_used") else "documentation"
+    )
+
     generation_prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are a technical documentation assistant.
+        ("system", f"""You are a technical assistant answering from {source_note}.
 
 Rules:
 1. Answer ONLY using the provided context. Do not use outside knowledge.
@@ -172,7 +178,7 @@ Rules:
 4. If the context partially answers the question, answer what you can and say what's missing.
 5. Use markdown formatting: code blocks for code, bullet points for lists.
 6. Keep the answer focused and concise."""),
-        ("human", """Context from documentation:
+        ("human", """Context:
 {context}
 
 Question: {question}
@@ -194,11 +200,7 @@ Answer (with citations):""")
 def hallucination_check_node(state: RAGState) -> dict:
     """
     Verifies the generated answer is actually supported by retrieved chunks.
-
-    Three outcomes:
-    - grounded     → all claims backed by context, passes through
-    - partial      → mostly fine, minor extrapolation, passes through
-    - hallucinated → answer makes things up → triggers fix_hallucination_node
+    Works for both vector store and web search results.
     """
     print(f"\n[Node 5] Hallucination Check")
 
@@ -255,7 +257,6 @@ Grounding verdict:""")
         elif line.upper().startswith("FEEDBACK:"):
             feedback = line.split(":", 1)[1].strip()
 
-    # Final safety net — if parsing failed entirely, default to grounded
     if not score:
         score = "grounded"
         feedback = "Could not parse grading response — defaulting to grounded"
@@ -271,8 +272,7 @@ Grounding verdict:""")
 def fix_hallucination_node(state: RAGState) -> dict:
     """
     Only runs when hallucination_check gives "hallucinated".
-    Regenerates with an ultra-strict prompt that forbids going beyond context.
-    Appends a transparency note to the final answer.
+    Regenerates with an ultra-strict prompt.
     """
     print(f"\n[Node 5b] Fixing hallucinated answer...")
 
@@ -283,11 +283,11 @@ def fix_hallucination_node(state: RAGState) -> dict:
     context = "\n\n---\n\n".join(context_parts)
 
     strict_prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are a technical documentation assistant with ONE strict rule:
+        ("system", """You are a technical assistant with ONE strict rule:
 You may ONLY state facts explicitly present in the provided context.
 
 If the context does not fully answer the question, say what IS covered
-and clearly state: "The documentation does not cover [X]."
+and clearly state: "The source does not cover [X]."
 
 Do NOT infer, extrapolate, or use outside knowledge. Citations are mandatory."""),
         ("human", """Context:
@@ -316,19 +316,84 @@ Provide a strictly grounded answer:""")
     return {"answer": new_answer + transparency_note}
 
 
+# ── Node 6: Web Search ────────────────────────────────────────────────────────
+def web_search_node(state: RAGState) -> dict:
+    """
+    Fallback when vector store has no relevant docs after all retries.
+
+    Searches the web using Tavily and converts results into Document objects
+    so they can flow into the existing generation_node unchanged.
+
+    If Tavily also returns nothing useful, sets relevant_documents to []
+    so the fallback_node can handle it cleanly.
+    """
+    print(f"\n[Node 6] Web Search Fallback | query='{state['question'][:60]}'")
+
+    try:
+        response = tavily.search(
+            query=state["question"],
+            max_results=4,
+            search_depth="basic"     # "advanced" uses 2 credits, basic uses 1
+        )
+
+        results = response.get("results", [])
+
+        if not results:
+            print("[Node 6] No web results found")
+            return {
+                "web_search_used": True,
+                "web_search_results": [],
+                "relevant_documents": []
+            }
+
+        # Convert Tavily results → LangChain Documents
+        # so generation_node can treat them identically to vector store chunks
+        web_docs = []
+        for r in results:
+            doc = Document(
+                page_content=r.get("content", ""),
+                metadata={
+                    "source": r.get("url", "web"),
+                    "title": r.get("title", "Web Result"),
+                    "similarity_score": r.get("score", 0.0),
+                    "from_web": True
+                }
+            )
+            web_docs.append(doc)
+
+        print(f"[Node 6] Found {len(web_docs)} web results")
+        for i, doc in enumerate(web_docs):
+            print(f"  result {i+1}: {doc.metadata.get('title', '')[:50]}")
+
+        return {
+            "web_search_used": True,
+            "web_search_results": web_docs,
+            "relevant_documents": web_docs   # feed directly into generation_node
+        }
+
+    except Exception as e:
+        print(f"[Node 6] Web search error: {e}")
+        return {
+            "web_search_used": True,
+            "web_search_results": [],
+            "relevant_documents": []
+        }
+
+
 # ── Fallback Node ──────────────────────────────────────────────────────────────
 def fallback_node(state: RAGState) -> dict:
     """
-    Called when retries are exhausted and still no relevant docs found.
-    Returns an honest response rather than hallucinating.
+    Last resort — called when both vector store and web search fail.
     """
-    print(f"\n[Fallback] No relevant docs after {state['retry_count']} retries")
+    print(f"\n[Fallback] No relevant docs after {state['retry_count']} retries"
+          f" | web_search_used={state.get('web_search_used', False)}")
 
     answer = (
-        f"I wasn't able to find relevant information in the documentation "
-        f"to answer: **{state['question']}**\n\n"
-        f"This question may be outside the scope of the indexed documents. "
-        f"Try rephrasing, or check the official documentation directly."
+        f"I wasn't able to find relevant information to answer: "
+        f"**{state['question']}**\n\n"
+        f"I searched both the indexed documentation and the web, "
+        f"but couldn't find anything relevant. "
+        f"Try rephrasing your question or check the official documentation directly."
     )
     return {"answer": answer}
 
@@ -336,9 +401,9 @@ def fallback_node(state: RAGState) -> dict:
 # ── Routing: After Grading ─────────────────────────────────────────────────────
 def route_after_grading(state: RAGState) -> str:
     """
-    - "generate"  → relevant docs found
-    - "rewrite"   → no relevant docs, retry if under limit
-    - "fallback"  → retries exhausted
+    - "generate"    → relevant docs found in vector store
+    - "rewrite"     → no relevant docs, retry if under limit
+    - "web_search"  → retries exhausted, try web before giving up
     """
     if not state["all_irrelevant"]:
         return "generate"
@@ -348,7 +413,21 @@ def route_after_grading(state: RAGState) -> str:
               f"({state['retry_count'] + 1}/{state['max_retries']})")
         return "rewrite"
 
-    print(f"[Router] Retry limit reached — falling back")
+    print(f"[Router] Retry limit reached — trying web search")
+    return "web_search"
+
+
+# ── Routing: After Web Search ──────────────────────────────────────────────────
+def route_after_web_search(state: RAGState) -> str:
+    """
+    - "generate"  → web search returned results, proceed to generation
+    - "fallback"  → web search returned nothing, give up
+    """
+    if state.get("relevant_documents"):
+        print("[Router] Web results found — generating answer")
+        return "generate"
+
+    print("[Router] Web search empty — falling back")
     return "fallback"
 
 

@@ -12,6 +12,7 @@ from langchain_core.documents import Document
 CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "rag_documents"
 TOP_K = 5
+SIMILARITY_THRESHOLD = 0.45  # chunks below this are too weak — filter them out
 
 
 class VectorStore:
@@ -38,7 +39,6 @@ class VectorStore:
             for i, doc in enumerate(documents)
         ]
 
-        # No manual embedding — ChromaDB handles it internally
         self.collection.upsert(
             ids=ids,
             documents=texts,
@@ -59,9 +59,17 @@ class VectorStore:
             results["metadatas"][0],
             results["distances"][0]
         ):
+            score = round(1 - distance, 4)
+
+            # Drop chunks below threshold before they even reach the grader
+            # This is the key fix — weak matches (0.33-0.39) never get through
+            if score < SIMILARITY_THRESHOLD:
+                print(f"  [filtered] score={score} below threshold — skipping")
+                continue
+
             doc = Document(
                 page_content=text,
-                metadata={**metadata, "similarity_score": round(1 - distance, 4)}
+                metadata={**metadata, "similarity_score": score}
             )
             documents.append(doc)
 
