@@ -13,9 +13,10 @@ Node order: query_analysis → retrieval → grading → generation → hallucin
 import os
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
+from langchain_core.messages import HumanMessage, AIMessage
 from tavily import TavilyClient
 
 from app.state import RAGState
@@ -38,9 +39,15 @@ tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 def query_analysis_node(state: RAGState) -> dict:
     """
     Rewrites the user's question to improve retrieval quality.
-    On retries, tries a significantly different phrasing.
+
+    Now chat_history aware — if the user asks "what about its performance?"
+    after a question about Django, the rewrite understands the context
+    and expands it to "what is the performance of Django ORM?"
     """
     print(f"\n[Node 1] Query Analysis | retry={state['retry_count']}")
+
+    chat_history = state.get("chat_history", [])
+    has_history = len(chat_history) > 0
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", """You are an expert at reformulating technical questions for better document retrieval.
@@ -49,11 +56,13 @@ Your job:
 1. Expand abbreviations and add relevant technical synonyms
 2. Make the intent explicit (e.g., "how to" vs "what is" vs "why")
 3. Add context that helps find the right documentation section
+4. If chat history is provided, resolve any pronouns or references
+   (e.g., "how does it work?" → "how does Django ORM work?" based on history)
 
-If this is a retry (retry_count > 0), the previous query failed to find relevant docs.
-Try a significantly different phrasing or break it into simpler terms.
+If this is a retry (retry_count > 0), try a significantly different phrasing.
 
 Return ONLY the rewritten query. No explanation, no preamble."""),
+        MessagesPlaceholder(variable_name="chat_history", optional=True),
         ("human", """Original question: {question}
 Retry count: {retry_count}
 Previous rewritten query: {previous_query}
@@ -65,7 +74,8 @@ Rewrite this question for better technical document retrieval:""")
     rewritten = chain.invoke({
         "question": state["question"],
         "retry_count": state["retry_count"],
-        "previous_query": state.get("rewritten_query", "none")
+        "previous_query": state.get("rewritten_query", "none"),
+        "chat_history": chat_history if has_history else []
     })
 
     print(f"[Node 1] Rewritten: {rewritten.strip()}")
@@ -76,7 +86,7 @@ Rewrite this question for better technical document retrieval:""")
 def retrieval_node(state: RAGState) -> dict:
     """
     Searches ChromaDB for the top-k chunks most similar to the rewritten query.
-    Filters out chunks below similarity threshold to prevent weak matches.
+    Filters out chunks below similarity threshold.
     """
     print(f"\n[Node 2] Retrieval | query='{state['rewritten_query'][:60]}...'")
 
@@ -150,20 +160,21 @@ Grade (relevant/irrelevant):""")
 def generation_node(state: RAGState) -> dict:
     """
     Generates the final answer grounded in relevant_documents.
-    Works for both vector store results and web search results —
-    whatever is in relevant_documents gets used here.
+
+    Now chat_history aware — uses previous Q&A pairs so the LLM
+    understands follow-up questions and can refer back to prior answers.
     """
     print(f"\n[Node 4] Generation | {len(state['relevant_documents'])} context chunks"
           f" | web_search={state.get('web_search_used', False)}")
+
+    chat_history = state.get("chat_history", [])
 
     context_parts = []
     for i, doc in enumerate(state["relevant_documents"]):
         source = doc.metadata.get("source", f"Document {i+1}")
         context_parts.append(f"[Source {i+1}: {source}]\n{doc.page_content}")
-
     context = "\n\n---\n\n".join(context_parts)
 
-    # Slightly different system prompt when using web results
     source_note = (
         "web search results" if state.get("web_search_used") else "documentation"
     )
@@ -177,7 +188,9 @@ Rules:
 3. After each key claim, cite the source like: [Source 1] or [Source 2]
 4. If the context partially answers the question, answer what you can and say what's missing.
 5. Use markdown formatting: code blocks for code, bullet points for lists.
-6. Keep the answer focused and concise."""),
+6. Keep the answer focused and concise.
+7. If the user refers to something from earlier in the conversation, use that context."""),
+        MessagesPlaceholder(variable_name="chat_history", optional=True),
         ("human", """Context:
 {context}
 
@@ -189,7 +202,8 @@ Answer (with citations):""")
     chain = generation_prompt | llm | StrOutputParser()
     answer = chain.invoke({
         "context": context,
-        "question": state["question"]
+        "question": state["question"],
+        "chat_history": chat_history
     })
 
     print(f"[Node 4] Answer generated ({len(answer)} chars)")
@@ -200,7 +214,6 @@ Answer (with citations):""")
 def hallucination_check_node(state: RAGState) -> dict:
     """
     Verifies the generated answer is actually supported by retrieved chunks.
-    Works for both vector store and web search results.
     """
     print(f"\n[Node 5] Hallucination Check")
 
@@ -320,12 +333,7 @@ Provide a strictly grounded answer:""")
 def web_search_node(state: RAGState) -> dict:
     """
     Fallback when vector store has no relevant docs after all retries.
-
-    Searches the web using Tavily and converts results into Document objects
-    so they can flow into the existing generation_node unchanged.
-
-    If Tavily also returns nothing useful, sets relevant_documents to []
-    so the fallback_node can handle it cleanly.
+    Searches the web using Tavily and converts results into Documents.
     """
     print(f"\n[Node 6] Web Search Fallback | query='{state['question'][:60]}'")
 
@@ -333,7 +341,7 @@ def web_search_node(state: RAGState) -> dict:
         response = tavily.search(
             query=state["question"],
             max_results=4,
-            search_depth="basic"     # "advanced" uses 2 credits, basic uses 1
+            search_depth="basic"
         )
 
         results = response.get("results", [])
@@ -346,8 +354,6 @@ def web_search_node(state: RAGState) -> dict:
                 "relevant_documents": []
             }
 
-        # Convert Tavily results → LangChain Documents
-        # so generation_node can treat them identically to vector store chunks
         web_docs = []
         for r in results:
             doc = Document(
@@ -368,7 +374,7 @@ def web_search_node(state: RAGState) -> dict:
         return {
             "web_search_used": True,
             "web_search_results": web_docs,
-            "relevant_documents": web_docs   # feed directly into generation_node
+            "relevant_documents": web_docs
         }
 
     except Exception as e:
@@ -400,11 +406,6 @@ def fallback_node(state: RAGState) -> dict:
 
 # ── Routing: After Grading ─────────────────────────────────────────────────────
 def route_after_grading(state: RAGState) -> str:
-    """
-    - "generate"    → relevant docs found in vector store
-    - "rewrite"     → no relevant docs, retry if under limit
-    - "web_search"  → retries exhausted, try web before giving up
-    """
     if not state["all_irrelevant"]:
         return "generate"
 
@@ -419,10 +420,6 @@ def route_after_grading(state: RAGState) -> str:
 
 # ── Routing: After Web Search ──────────────────────────────────────────────────
 def route_after_web_search(state: RAGState) -> str:
-    """
-    - "generate"  → web search returned results, proceed to generation
-    - "fallback"  → web search returned nothing, give up
-    """
     if state.get("relevant_documents"):
         print("[Router] Web results found — generating answer")
         return "generate"
@@ -433,11 +430,6 @@ def route_after_web_search(state: RAGState) -> str:
 
 # ── Routing: After Hallucination Check ────────────────────────────────────────
 def route_after_hallucination_check(state: RAGState) -> str:
-    """
-    - "fix"  → hallucinated, regenerate strictly
-    - "done" → grounded or partial, pass through to END
-    Always returns a string, never None.
-    """
     score = state.get("hallucination_score", "grounded")
 
     if isinstance(score, str) and "hallucinated" in score.lower():

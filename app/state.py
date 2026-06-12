@@ -7,11 +7,15 @@ Think of it as the shared memory between all pipeline stages.
 
 from typing import TypedDict, List
 from langchain_core.documents import Document
+from langchain_core.messages import BaseMessage
 
 
 class RAGState(TypedDict):
     # --- Input ---
     question: str                        # Original user question (never modified)
+
+    # --- Conversation Memory ---
+    chat_history: List[BaseMessage]      # All previous messages in this session
 
     # --- Query Analysis ---
     rewritten_query: str                 # Expanded/clarified version for better retrieval

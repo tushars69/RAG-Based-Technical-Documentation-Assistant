@@ -2,11 +2,14 @@
 FastAPI application — exposes the RAG pipeline via HTTP.
 
 Endpoints:
-  POST /query       — Ask a question, get answer with citations
-  POST /ingest      — Add new documents from URLs
-  POST /ingest/file — Upload a .md / .txt / .html file
-  GET  /documents   — List all indexed documents
-  POST /feedback    — Submit thumbs up/down on an answer
+  POST /session         — Create a new chat session
+  POST /query           — Ask a question (with optional session_id)
+  POST /ingest          — Add new documents from URLs
+  POST /ingest/file     — Upload a .md / .txt / .html file
+  GET  /documents       — List all indexed documents
+  POST /feedback        — Submit thumbs up/down on an answer
+  GET  /session/{id}    — Get chat history for a session
+  DELETE /session/{id}  — Clear a session's history
 """
 
 import uuid
@@ -22,6 +25,7 @@ from bs4 import BeautifulSoup
 from markdownify import markdownify
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
+from langchain_core.messages import HumanMessage, AIMessage
 from dotenv import load_dotenv
 
 from app.graph import rag_graph
@@ -32,7 +36,7 @@ load_dotenv()
 # ── App Setup ──────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="RAG Documentation Assistant",
-    description="Self-corrective RAG pipeline with LangGraph.",
+    description="Self-corrective RAG pipeline with LangGraph + conversation memory.",
     version="1.0.0"
 )
 
@@ -43,12 +47,19 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
+# ── In-memory stores ───────────────────────────────────────────────────────────
 feedback_store: List[dict] = []
+
+# session_id → list of LangChain messages
+# In production this would be Redis or a DB
+session_store: dict = {}
+
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
 class QueryRequest(BaseModel):
     question: str
     max_retries: int = 2
+    session_id: Optional[str] = None   # if None, stateless single-turn query
 
 class QueryResponse(BaseModel):
     question: str
@@ -58,6 +69,7 @@ class QueryResponse(BaseModel):
     query_id: str
     hallucination_score: str
     web_search_used: bool
+    session_id: Optional[str] = None   # echoed back so client can reuse it
 
 class IngestURLRequest(BaseModel):
     urls: List[str]
@@ -65,7 +77,7 @@ class IngestURLRequest(BaseModel):
 
 class FeedbackRequest(BaseModel):
     query_id: str
-    rating: int        # 1 = thumbs up, -1 = thumbs down
+    rating: int
     comment: Optional[str] = None
 
 # ── Text Splitter ──────────────────────────────────────────────────────────────
@@ -80,11 +92,9 @@ splitter = RecursiveCharacterTextSplitter(
 def fetch_url_as_markdown(url: str) -> str:
     response = requests.get(url, timeout=15, headers={"User-Agent": "RAG-Bot/1.0"})
     response.raise_for_status()
-
     soup = BeautifulSoup(response.text, "html.parser")
     for tag in soup(["nav", "footer", "script", "style", "header"]):
         tag.decompose()
-
     main = soup.find("main") or soup.find("article") or soup.find("body")
     return markdownify(str(main), heading_style="ATX")
 
@@ -112,12 +122,31 @@ def root():
     return {
         "message": "RAG Documentation Assistant",
         "docs": "/docs",
-        "chunks_indexed": vector_store.get_chunk_count()
+        "chunks_indexed": vector_store.get_chunk_count(),
+        "active_sessions": len(session_store)
     }
+
+
+@app.post("/session")
+def create_session():
+    """
+    Create a new chat session.
+    Returns a session_id to pass in subsequent /query calls.
+    """
+    session_id = str(uuid.uuid4())
+    session_store[session_id] = []
+    print(f"[Session] Created: {session_id}")
+    return {"session_id": session_id}
 
 
 @app.post("/query", response_model=QueryResponse)
 def query(request: QueryRequest):
+    """
+    Ask a question. Optionally pass a session_id for multi-turn conversation.
+
+    Without session_id → stateless, no memory between calls
+    With session_id    → full conversation history sent to LLM
+    """
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
@@ -127,8 +156,20 @@ def query(request: QueryRequest):
             detail="No documents indexed yet. POST to /ingest first."
         )
 
+    # Load chat history if session_id provided
+    session_id = request.session_id
+    chat_history = []
+
+    if session_id:
+        if session_id not in session_store:
+            # Auto-create session if ID not found
+            session_store[session_id] = []
+        chat_history = session_store[session_id]
+        print(f"[Session] {session_id} | history length: {len(chat_history)}")
+
     initial_state = {
         "question": request.question,
+        "chat_history": chat_history,
         "rewritten_query": "",
         "documents": [],
         "relevant_documents": [],
@@ -143,8 +184,16 @@ def query(request: QueryRequest):
     }
 
     final_state = rag_graph.invoke(initial_state)
+    answer = final_state["answer"]
 
-    # Build sources list — from vector store or web search
+    # Save this Q&A turn to session history
+    if session_id and session_id in session_store:
+        session_store[session_id].append(HumanMessage(content=request.question))
+        session_store[session_id].append(AIMessage(content=answer))
+        print(f"[Session] {session_id} | saved turn, "
+              f"history now: {len(session_store[session_id])} messages")
+
+    # Build sources
     sources = []
     seen_sources = set()
     for doc in final_state.get("relevant_documents", []):
@@ -160,19 +209,50 @@ def query(request: QueryRequest):
 
     return QueryResponse(
         question=request.question,
-        answer=final_state["answer"],
+        answer=answer,
         sources=sources,
         retry_count=final_state["retry_count"],
         query_id=str(uuid.uuid4()),
         hallucination_score=final_state.get("hallucination_score", "grounded"),
-        web_search_used=final_state.get("web_search_used", False)
+        web_search_used=final_state.get("web_search_used", False),
+        session_id=session_id
     )
+
+
+@app.get("/session/{session_id}")
+def get_session_history(session_id: str):
+    """Get the full chat history for a session."""
+    if session_id not in session_store:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    history = session_store[session_id]
+    formatted = []
+    for msg in history:
+        formatted.append({
+            "role": "user" if isinstance(msg, HumanMessage) else "assistant",
+            "content": msg.content
+        })
+
+    return {
+        "session_id": session_id,
+        "message_count": len(formatted),
+        "history": formatted
+    }
+
+
+@app.delete("/session/{session_id}")
+def clear_session(session_id: str):
+    """Clear a session's chat history."""
+    if session_id not in session_store:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session_store[session_id] = []
+    return {"status": "cleared", "session_id": session_id}
 
 
 @app.post("/ingest")
 def ingest_urls(request: IngestURLRequest):
     results = []
-
     for url in request.urls:
         try:
             print(f"[Ingest] Fetching {url}")
@@ -206,7 +286,6 @@ async def ingest_file(file: UploadFile = File(...)):
         text = markdownify(text)
 
     count = chunk_and_store(text=text, source=file.filename, title=file.filename)
-
     return {
         "filename": file.filename,
         "chunks_added": count,
@@ -251,4 +330,3 @@ def feedback_summary():
         "thumbs_down": len(feedback_store) - ups,
         "approval_rate": round(ups / len(feedback_store), 2)
     }
-    
