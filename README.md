@@ -7,17 +7,18 @@ Built for the **Express Analytics AI/ML Engineer Intern** assignment.
 
 ## What It Does
 
-A user asks a natural language question. The system:
+A user asks a natural language question. The system runs it through a multi-stage pipeline:
 
-
-Rewrites the query for better retrieval (expanding abbreviations, resolving pronouns from chat history)
-Retrieves the most semantically similar document chunks from ChromaDB
-Grades each chunk — irrelevant chunks are filtered out before generation
-Retries with a different query if no relevant chunks were found (up to 2 times)
-Falls back to web search via Tavily if the vector store has nothing useful
-Generates a grounded answer with inline source citations
-Checks for hallucination — if the answer makes claims not in the context, it auto-regenerates with a stricter prompt
-Returns the final answer with sources, hallucination score, and a flag indicating whether web search was used
+| Step | Node | What Happens |
+|------|------|-------------|
+| 1 | Query Analysis | Rewrites the query for better retrieval — expands abbreviations, resolves pronouns from chat history ("it" → "FastAPI path parameters") |
+| 2 | Retrieval | Searches ChromaDB using cosine similarity, filters out chunks scoring below 0.45 |
+| 3 | Document Grading | LLM judges each chunk as relevant or irrelevant — off-topic chunks are dropped before generation |
+| 4 | Retry Loop | If no relevant chunks found, rewrites the query differently and re-retrieves (up to 2 retries) |
+| 5 | Web Search Fallback | If retries are exhausted, falls back to live web search via Tavily |
+| 6 | Generation | LLM generates a grounded answer with inline citations referencing source documents |
+| 7 | Hallucination Check | Second LLM call verifies every claim is supported by the context — auto-regenerates with a stricter prompt if not |
+| 8 | Response | Returns answer + sources + `hallucination_score` + `web_search_used` flag |
 
 
 ##  Features
@@ -38,6 +39,7 @@ Returns the final answer with sources, hallucination score, and a flag indicatin
 
 ## Project Structure
 
+```
 RAG-Based-Technical-Documentation-Assistant/
 ├── app/
 │   ├── __init__.py
@@ -50,6 +52,7 @@ RAG-Based-Technical-Documentation-Assistant/
 ├── ingest.py            # One-time corpus ingestion script
 ├── pyproject.toml       # Poetry dependencies
 └── README.md
+```
 
 
 ## Architecture & Workflow
