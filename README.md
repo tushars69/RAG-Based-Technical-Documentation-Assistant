@@ -87,7 +87,8 @@ graph TD
     FIX --> END
 
 
-    ## What I Would Improve With More Time
+
+## What I Would Improve With More Time
 
 ### Infrastructure & Deployment
 - **Docker Compose** — Containerise the FastAPI server, Streamlit UI, and ChromaDB into a single `docker-compose.yml` for one-command local setup and consistent environments across machines
