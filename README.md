@@ -18,7 +18,7 @@ A user asks a natural language question. The system runs it through a multi-stag
 | 5 | Web Search Fallback | If retries are exhausted, falls back to live web search via Tavily |
 | 6 | Generation | LLM generates a grounded answer with inline citations referencing source documents |
 | 7 | Hallucination Check | Second LLM call verifies every claim is supported by the context — auto-regenerates with a stricter prompt if not |
-| 8 | Response | Returns answer + sources + `hallucination_score` + `web_search_used` flag |
+| 8 | Response | Returns answer + sources + `hallucination_score` flag |
 
 
 ##  Features
