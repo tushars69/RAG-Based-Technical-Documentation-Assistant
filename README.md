@@ -1,12 +1,26 @@
-# ⚡ RAG-Based Technical Documentation Assistant
+#  RAG-Based Technical Documentation Assistant
 
 An intelligent, self-correcting Retrieval-Augmented Generation (RAG) system built with **FastAPI**, **LangGraph**, and **ChromaDB**. This project serves as a technical documentation assistant capable of answering complex queries, routing around irrelevant data, fact-checking its own answers, and falling back to real-time web searches when local knowledge fails.
 
 Built for the **Express Analytics AI/ML Engineer Intern** assignment.
 
----
 
-## 🚀 Features
+## What It Does
+
+A user asks a natural language question. The system:
+
+
+Rewrites the query for better retrieval (expanding abbreviations, resolving pronouns from chat history)
+Retrieves the most semantically similar document chunks from ChromaDB
+Grades each chunk — irrelevant chunks are filtered out before generation
+Retries with a different query if no relevant chunks were found (up to 2 times)
+Falls back to web search via Tavily if the vector store has nothing useful
+Generates a grounded answer with inline source citations
+Checks for hallucination — if the answer makes claims not in the context, it auto-regenerates with a stricter prompt
+Returns the final answer with sources, hallucination score, and a flag indicating whether web search was used
+
+
+##  Features
 
 ### Core Capabilities
 * **LangGraph Workflow:** A stateful, cyclical graph that intelligently routes queries based on continuous self-evaluation.
@@ -21,9 +35,24 @@ Built for the **Express Analytics AI/ML Engineer Intern** assignment.
 * **Streamlit Interactive UI:** A custom frontend featuring real-time 
 * **One-click Chat Log Exports:** It allows users to download their entire session history as a formatted `.txt` file.
 
----
 
-## 🧠 Architecture & Workflow
+## Project Structure
+
+RAG-Based-Technical-Documentation-Assistant/
+├── app/
+│   ├── __init__.py
+│   ├── state.py         # RAGState TypedDict — shared memory between nodes
+│   ├── vector_store.py  # ChromaDB wrapper with embeddings
+│   ├── nodes.py         # All pipeline nodes + routing functions
+│   ├── graph.py         # LangGraph StateGraph assembly
+│   ├── main.py          # FastAPI app + session management
+│   └── frontend.py      # Streamlit UI
+├── ingest.py            # One-time corpus ingestion script
+├── pyproject.toml       # Poetry dependencies
+└── README.md
+
+
+## Architecture & Workflow
 
 The pipeline utilizes a self-reflective graph architecture to ensure high-accuracy, grounded responses.
 

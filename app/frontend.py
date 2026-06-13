@@ -3,7 +3,7 @@ import requests
 import time
 
 # ── Configuration ────────────────────────────────────────────────────────
-API_URL = "https://rag-based-technical.onrender.com"
+API_URL = "http://localhost:8000"
 
 st.set_page_config(
     page_title="RAG Docs Assistant", 

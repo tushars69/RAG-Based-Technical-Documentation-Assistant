@@ -11,9 +11,6 @@ You can swap these URLs for any technical docs you prefer.
 import sys
 from app.main import chunk_and_store, fetch_url_as_markdown
 
-headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-response = requests.get(url, headers=headers)
-
 # ── Your document corpus ──────────────────────────────────────────────────────
 # These are FastAPI official docs pages — well-structured, good for demo
 CORPUS = [
