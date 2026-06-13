@@ -85,3 +85,19 @@ graph TD
     HC -- "Grounded" --> END((End: Output)):::terminal
     HC -- "Hallucinated" --> FIX[Strict Regeneration]:::primary
     FIX --> END
+
+
+    ## What I Would Improve With More Time
+
+### Infrastructure & Deployment
+- **Docker Compose** — Containerise the FastAPI server, Streamlit UI, and ChromaDB into a single `docker-compose.yml` for one-command local setup and consistent environments across machines
+- **Cloud Deployment** — Deploy the FastAPI backend on Railway or Render and the Streamlit frontend on Streamlit Cloud, with environment variables managed via the platform's secrets manager
+- **Persistent Session Storage** — Sessions are currently in-memory and lost on server restart. Would replace with Redis for fast session reads or SQLite for simplicity, keyed by `session_id`
+
+### Pipeline Quality
+- **Streaming Responses** — Stream generation token-by-token using FastAPI's `StreamingResponse` and LangChain's streaming callbacks, so users see the answer build up instead of waiting for the full response
+- **Re-ranking** — Add a cross-encoder re-ranker (e.g. `ms-marco-MiniLM`) between retrieval and grading to improve chunk ordering. The current cosine similarity score is a weak signal — re-ranking scores semantic fit much more precisely
+- **Metadata Filtering** — Let users scope retrieval to a specific document source (e.g. "only search the auth docs"), implemented as a ChromaDB `where` filter on the `source` metadata field
+
+### Evaluation
+- **RAGAS Evaluation Pipeline** — Use the RAGAS framework to automatically measure faithfulness, answer relevance, and context precision on a curated test set. This would make it possible to compare the impact of changes to chunking strategy, grading prompts, or embedding models objectively rather than by manual inspection
